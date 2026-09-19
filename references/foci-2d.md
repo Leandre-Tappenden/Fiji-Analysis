@@ -46,7 +46,7 @@ No unrecognised configuration keys are accepted, so misspelled thresholds cannot
 
 ```
 python3 scripts/fiji_foci.py doctor --fiji /path/to/Fiji.app
-python3 scripts/fiji_foci.py run --fiji /path/to/Fiji.app --config /project/provenance/detection.json --out /project/review/annotations/image-001
+python3 scripts/fiji_foci.py run --fiji /path/to/Fiji.app --config /project/provenance/detection.json --out /project/annotations/image-001
 ```
 
 Each image output contains `foci.csv`, `nuclei.csv` (including zero-count labels), `foci.zip`, `nuclei.zip` when applicable, `review.tif` with editable overlay, `preview.png`, the executed configuration, hashes, software information and stdout/stderr. A new output folder is required; a failed run stays marked failed. Register a selected preview and record the threshold decision in the project log. Aggregate per-image files using sample/repeat mappings from the manifest; the helper cannot infer those mappings.
@@ -57,4 +57,4 @@ The overlay is saved on a duplicate of the review channel. Raw files remain unch
 
 Retain focus coordinates, counts per included nucleus and totals per image. Preserve zero-count nuclei. Keep per-repeat summaries separate from pooled cell-level distributions; specify image versus cell weighting and pairing. If using EdU, validate the classification on its own channel, preserve ambiguous/missing states, and do not use antibody outcome to select an EdU gate.
 
-Save R code when producing R graphs. Show individual biological repeats and effect sizes with uncertainty where appropriate; do not manufacture statistical power from the number of nuclei. State that detected antibody puncta are image-based measurements; molecular specificity requires appropriate experimental controls.
+Save commented R code in `r_scripts/`, CSV inputs in `csv/`, and matching PNGs in `graphs/`; map graph IDs to code/data using [outputs.md](outputs.md). Show individual biological repeats and effect sizes with uncertainty where appropriate; do not manufacture statistical power from the number of nuclei. State that detected antibody puncta are image-based measurements; molecular specificity requires appropriate experimental controls.

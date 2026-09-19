@@ -52,9 +52,12 @@ def init(args):
     if source == root or source in root.parents:
         raise ValueError('Choose a run outside the raw source directory')
     root.mkdir(parents=True, exist_ok=False)
-    for folder in ('tables', 'figures', 'review/images', 'review/annotations', 'provenance'):
+    for folder in ('r_scripts', 'csv/main_results', 'csv/qc_segmentation',
+                   'csv/qc_counting_sensitivity', 'csv/stats', 'qc_images/channel_testing',
+                   'qc_images/segmentation', 'qc_images/foci_counts', 'analysis_scripts',
+                   'graphs', 'annotations', 'provenance'):
         (root/folder).mkdir(parents=True, exist_ok=True)
-    brief = {'schema_version': 1, 'run_id': root.name, 'title': args.title,
+    brief = {'schema_version': 2, 'run_id': root.name, 'title': args.title,
              'source': str(source), 'created_utc': timestamp(), 'output_mode': args.mode,
              'primary_artifact': None, 'status': 'draft',
              'validation': 'Not yet assessed', 'summary': [], 'measurement': {}, 'design': {},
@@ -93,7 +96,8 @@ def event(args, root):
         record['configuration_sha256'] = digest(parameters)
     with (root/'provenance/events.jsonl').open('a', encoding='utf-8') as f:
         f.write(json.dumps(record, ensure_ascii=False, allow_nan=False)+'\n')
-    render(root)
+    if not getattr(args, 'no_render', False):
+        render(root)
     return {'event_id': record['event_id'], 'kind': args.kind}
 
 
@@ -109,10 +113,42 @@ def add(args, root):
         if not args.stage or not args.scaling or not args.image_id:
             raise ValueError('Preview requires --stage, --scaling and --image-id')
     brief = read(root/'provenance/brief.json')
+    category = getattr(args, 'category', None)
+    graph_id = getattr(args, 'graph_id', None)
+    uses = getattr(args, 'uses', None) or []
+    if graph_id and not re.fullmatch(r'[A-Za-z0-9_-]+', graph_id):
+        raise ValueError('graph-id must use safe letters/digits/underscore/hyphen')
+    if brief.get('schema_version', 1) >= 2:
+        if args.role == 'table':
+            category = category or 'main_results'
+            if category not in ('main_results', 'qc_segmentation', 'qc_counting_sensitivity', 'stats'):
+                raise ValueError('Unknown CSV category')
+        elif args.role == 'preview':
+            category = category or {'channels': 'channel_testing', 'channel identification': 'channel_testing',
+                                    'segmentation': 'segmentation'}.get(args.stage.lower(), 'foci_counts')
+            if category not in ('channel_testing', 'segmentation', 'foci_counts'):
+                raise ValueError('Unknown QC image category')
+        elif category:
+            raise ValueError('category applies only to tables and previews')
+        locations = {'table': 'csv/' + (category or 'main_results'),
+                     'preview': 'qc_images/' + (category or 'foci_counts'),
+                     'figure': 'graphs', 'annotation': 'annotations', 'provenance': 'provenance',
+                     'r_script': 'r_scripts', 'analysis_script': 'analysis_scripts', 'guide': 'analysis_scripts'}
+    else:
+        locations.update(r_script='r_scripts', analysis_script='analysis_scripts', guide='analysis_scripts')
+        if category:
+            raise ValueError('Categories require a version-2 run; keep legacy paths unchanged')
+    artifacts = read(root/'provenance/artifacts.json')
+    registered = {a['path'] for a in artifacts}
+    for dependency in uses:
+        if Path(dependency).is_absolute() or not internal(root, dependency).is_file():
+            raise ValueError('Dependency must be an existing run-relative file: ' + dependency)
+        if dependency not in registered:
+            raise ValueError('Register dependency first: ' + dependency)
     if args.primary:
         mode = brief['output_mode']
         if not ((mode == 'table' and args.role == 'table' and source.suffix.lower() == '.csv') or
-                (mode == 'figures' and args.role == 'figure' and source.suffix.lower() == '.pdf')):
+                (mode == 'figures' and args.role == 'figure' and source.suffix.lower() in ('.pdf', '.png', '.svg'))):
             raise ValueError('--primary must match the chosen table/figures mode')
     destination = Path(locations[args.role])
     if args.image_id:
@@ -132,13 +168,15 @@ def add(args, root):
         shutil.copyfile(source, target)
     artifact = {'path': relative, 'role': args.role, 'caption': args.caption,
                 'stage': args.stage or '', 'image_id': args.image_id or '',
-                'scaling': args.scaling or '', 'sha256': digest(target), 'registered_utc': timestamp()}
+                'scaling': args.scaling or '', 'category': category or '',
+                'graph_id': graph_id or '', 'uses': uses, 'sha256': digest(target), 'registered_utc': timestamp()}
     artifacts.append(artifact)
     write(root/'provenance/artifacts.json', artifacts)
     if args.primary:
         brief['primary_artifact'] = relative
         write(root/'provenance/brief.json', brief)
-    render(root)
+    if not getattr(args, 'no_render', False):
+        render(root)
     return artifact
 
 
@@ -156,6 +194,23 @@ def table(rows, fields):
     head = ''.join('<th>'+escaped(k.replace('_', ' '))+'</th>' for k in fields)
     body = ''.join('<tr>'+''.join('<td>'+escaped(r.get(k, ''))+'</td>' for k in fields)+'</tr>' for r in rows)
     return '<div class="scroll"><table><thead><tr>'+head+'</tr></thead><tbody>'+body+'</tbody></table></div>'
+
+
+def artifact_link(artifact):
+    return ('<a href="'+quote(artifact['path'])+'">'+escaped(artifact['path'])+'</a> — '+
+            escaped(artifact['caption']))
+
+
+def brief_section(value):
+    if not value:
+        return '<p class="muted">Not recorded.</p>'
+    if isinstance(value, dict):
+        return table([{'item': key, 'details': val} for key,val in value.items()], ['item','details'])
+    if isinstance(value, list):
+        if all(isinstance(item, dict) for item in value):
+            return table(value, list(dict.fromkeys(k for item in value for k in item)))
+        return '<ul>'+''.join('<li>'+escaped(item)+'</li>' for item in value)+'</ul>'
+    return '<p>'+escaped(value)+'</p>'
 
 
 def export_events(root, events, kind, name):
@@ -179,6 +234,11 @@ def render(root):
             raise ValueError('Registered artifact changed; preserve it as an explicit revision: ' + a['path'])
     for kind, name in (('quality', 'quality_log.csv'), ('decision', 'decision_log.csv')):
         export_events(root, events, kind, name)
+    registered = {a['path'] for a in artifacts}
+    for a in artifacts:
+        for dependency in a.get('uses', []):
+            if dependency not in registered:
+                raise ValueError('Register dependency before rendering: ' + dependency)
     primary = brief.get('primary_artifact')
     if primary and not any(a['path'] == primary for a in artifacts):
         raise ValueError('Primary artifact must be registered')
@@ -199,11 +259,41 @@ def render(root):
         '<h1>'+escaped(brief['title'])+'</h1>',
         '<div class="meta"><b>Status:</b> '+escaped(brief['status'])+'<br><b>Validation:</b> '+escaped(brief['validation'])+
         '<br><b>Run:</b> '+escaped(brief['run_id'])+'</div>']
+    sections = [('summary', 'Summary'), ('design', 'Experiment and question'),
+                ('channels', 'Channel attribution'), ('results', 'Results and graphs'),
+                ('method', 'Method and sensitivity'), ('image-checks', 'QC images'),
+                ('quality', 'Data quality'), ('decisions', 'Measurement decisions'),
+                ('files', 'Reproduction and files')]
+    if (root/'provenance/original_prompt.txt').is_file():
+        sections.append(('prompt', 'Original request'))
+    parts.append('<nav aria-label="Contents"><h2>Contents</h2><ul>' + ''.join(
+        '<li><a href="#'+key+'">'+label+'</a></li>' for key,label in sections) + '</ul></nav>')
+    parts.append('<h2 id="summary">Summary</h2>')
     if primary:
         parts.append('<p><a href="'+quote(primary)+'"><b>Open main '+escaped(brief['output_mode'])+' output</b></a></p>')
     parts += ['<p>'+escaped(s)+'</p>' for s in brief.get('summary', [])]
     if not brief.get('summary'):
         parts.append('<p class="muted">Analysis is being prepared. No scientific result has been recorded.</p>')
+    parts.append('<h2 id="design">Experiment and question</h2>' + brief_section(brief.get('design')))
+    parts.append('<h2 id="channels">Channel attribution</h2>' + brief_section(brief.get('channel_mapping')))
+    parts.append('<h2 id="results">Results and graphs</h2>')
+    for a in (a for a in artifacts if a['role'] == 'figure'):
+        parts.append('<figure>')
+        if Path(a['path']).suffix.lower() in ('.png', '.jpg', '.jpeg', '.svg'):
+            parts.append('<img loading="lazy" src="'+quote(a['path'])+'" alt="'+escaped(a['caption'])+'">')
+        parts.append('<figcaption>'+artifact_link(a)+'</figcaption>')
+        if a.get('graph_id'):
+            parts.append('<p>Graph: '+escaped(a['graph_id'])+'</p>')
+        dependencies = set(a.get('uses', []))
+        if a.get('graph_id'):
+            for script in artifacts:
+                if script['role'] == 'r_script' and script.get('graph_id') == a['graph_id']:
+                    dependencies.add(script['path'])
+                    dependencies.update(script.get('uses', []))
+        if dependencies:
+            parts.append('<p>Code and data: '+ ' · '.join(
+                '<a href="'+quote(path)+'">'+escaped(path)+'</a>' for path in sorted(dependencies))+'</p>')
+        parts.append('</figure>')
     csv_artifacts = [a for a in artifacts if a['role']=='table' and a['path'].lower().endswith('.csv')]
     if csv_artifacts:
         chosen = next((a for a in csv_artifacts if a['path']==primary), csv_artifacts[0])
@@ -212,26 +302,42 @@ def render(root):
             rows = list(itertools.islice(reader, 12))
             fields = reader.fieldnames or []
         parts += ['<h2>Results preview</h2><p class="muted">First 12 rows; use the CSV for the full table.</p>', table(rows, fields)]
+    parts.append('<h2 id="method">Method and sensitivity</h2>'+brief_section(brief.get('measurement')))
+    if brief.get('open_questions'):
+        parts.append('<h3>Unresolved questions</h3>'+brief_section(brief['open_questions']))
     previews = [a for a in artifacts if a['role']=='preview']
+    parts.append('<h2 id="image-checks">QC images</h2>')
     if previews:
-        parts.append('<h2>Image checks</h2>')
         for a in previews:
             parts.append('<figure><a href="'+quote(a['path'])+'"><img loading="lazy" src="'+quote(a['path'])+
                 '" alt="'+escaped(a['caption'])+'"></a><figcaption><b>'+escaped(a['stage'])+' · '+
-                escaped(a['image_id'])+'</b> — '+escaped(a['caption'])+'<br>Display: '+escaped(a['scaling'])+'</figcaption></figure>')
+                escaped(a['image_id'])+'</b> — '+escaped(a['caption'])+'<br>Display: '+escaped(a['scaling'])+'<br>'+artifact_link(a)+'</figcaption></figure>')
     quality = [e for e in events if e['kind']=='quality']
     decisions = [e for e in events if e['kind']=='decision']
-    parts += ['<h2>Data quality</h2>', table(quality, ['severity','scope','finding','action','affected_metrics']),
-              '<h2>Measurement decisions</h2>', table(decisions, ['parameter','value','units','scope','reason','chosen_by'])]
-    parts.append('<details><summary>Analysis brief and supporting files</summary>')
-    parts.append('<pre style="white-space:pre-wrap">'+escaped(brief)+'</pre><ul>')
-    for a in artifacts:
-        parts.append('<li><a href="'+quote(a['path'])+'">'+escaped(a['caption'])+'</a> ('+escaped(a['role'])+')</li>')
+    parts += ['<h2 id="quality">Data quality</h2>', table(quality, ['severity','scope','finding','action','affected_metrics']),
+              '<h2 id="decisions">Measurement decisions</h2>', table(decisions, ['parameter','value','units','scope','reason','chosen_by'])]
+    parts.append('<h2 id="files">Reproduction and files</h2>')
+    groups = [('Graphs', ['figure']), ('R scripts', ['r_script']), ('CSV data', ['table']),
+              ('Analysis scripts and guides', ['analysis_script', 'guide']),
+              ('QC images', ['preview']), ('Editable annotations', ['annotation']),
+              ('Provenance', ['provenance'])]
+    for title, roles in groups:
+        selected = [a for a in artifacts if a['role'] in roles]
+        if selected:
+            parts.append('<details><summary>'+title+' ('+str(len(selected))+')</summary><ul>')
+            parts.extend('<li>'+artifact_link(a)+'</li>' for a in selected)
+            parts.append('</ul></details>')
+    parts.append('<details><summary>Analysis records</summary><ul>')
     for path, label in [('provenance/brief.json','Analysis brief'),('provenance/quality_log.csv','Full quality log'),
                         ('provenance/decision_log.csv','Full decision log'),('provenance/events.jsonl','Event history'),
                         ('provenance/artifacts.json','Artifact registry')]:
-        parts.append('<li><a href="'+path+'">'+label+'</a></li>')
-    parts.append('</ul></details></body></html>')
+        parts.append('<li><a href="'+path+'">'+label+' — '+path+'</a></li>')
+    parts.append('</ul></details>')
+    prompt = root/'provenance/original_prompt.txt'
+    if prompt.is_file():
+        parts.append('<h2 id="prompt">Original request</h2><pre style="white-space:pre-wrap">'+
+                     escaped(prompt.read_text(encoding='utf-8'))+'</pre>')
+    parts.append('</body></html>')
     (root/'report.html').write_text('\n'.join(parts), encoding='utf-8')
     return {'report': str(root/'report.html'), 'primary': str(root/primary) if primary else str(root/'report.html')}
 
@@ -246,10 +352,14 @@ def main():
     p = sub.add_parser('event', help='Append a structured QC finding or measurement decision')
     p.add_argument('--run', required=True); p.add_argument('--kind', choices=['quality','decision'], required=True)
     p.add_argument('--json', required=True)
+    p.add_argument('--no-render', action='store_true', help='Defer report/hash sweep until render')
     p = sub.add_parser('add', help='Copy/register one supporting file and refresh report')
     p.add_argument('--run', required=True); p.add_argument('--file', required=True)
-    p.add_argument('--role', choices=['preview','table','figure','annotation','provenance'], required=True)
+    p.add_argument('--role', choices=['preview','table','figure','annotation','provenance','r_script','analysis_script','guide'], required=True)
     p.add_argument('--caption', required=True); p.add_argument('--stage'); p.add_argument('--image-id')
+    p.add_argument('--category'); p.add_argument('--graph-id')
+    p.add_argument('--uses', action='append', help='Run-relative registered input/script path; repeatable')
+    p.add_argument('--no-render', action='store_true', help='Defer report/hash sweep until render')
     p.add_argument('--scaling'); p.add_argument('--primary', action='store_true')
     p = sub.add_parser('render', help='Refresh report and CSV logs from current records')
     p.add_argument('--run', required=True)

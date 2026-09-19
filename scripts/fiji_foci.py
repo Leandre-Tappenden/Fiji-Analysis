@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run explicit 2D maxima using a selected local Fiji; Python standard library only."""
 import argparse
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import math
@@ -111,7 +113,26 @@ def configuration(path):
     return config
 
 
-def run(env, config, out, timeout):
+@contextmanager
+def prepared_helper(env):
+    """Compile and probe once; callers must finish jobs before leaving this context."""
+    with tempfile.TemporaryDirectory(prefix='fiji-foci-') as tmp:
+        base = compile_helper(env, tmp)
+        yield {'command': base, 'environment': dict(env),
+               'imagej_version': call(base + ['probe'])[0],
+               'java_version': '\n'.join(call([env['java'], '-version'])),
+               'helper_sha256': {p.name: sha(p) for p in
+                                (Path(__file__), Path(__file__).with_name('FijiFoci.java'))}}
+
+
+def run(env, config, out, timeout, prepared=None):
+    if prepared is None:
+        with prepared_helper(env) as helper:
+            return run(env, config, out, timeout, prepared=helper)
+    if prepared['environment'] != env or any(
+            sha(Path(__file__).with_name(name)) != digest
+            for name, digest in prepared['helper_sha256'].items()):
+        raise ValueError('Prepared helper no longer matches environment/source')
     out = Path(out).expanduser().resolve()
     out.mkdir(parents=True, exist_ok=False)
     paths = [config[k] for k in ('detection_image', 'review_image', 'nuclei_labels') if config[k]]
@@ -124,22 +145,21 @@ def run(env, config, out, timeout):
     record['configuration_sha256'] = sha(out/'configuration.json')
     save(out/'execution.json', record)
     try:
-        with tempfile.TemporaryDirectory(prefix='fiji-foci-') as tmp:
-            base = compile_helper(env, tmp)
-            record['imagej_version'] = call(base + ['probe'])[0]
-            record['java_version'] = '\n'.join(call([env['java'], '-version']))
-            command = base + [config['image_id'], config['detection_image'], config['review_image'],
-                config['nuclei_labels'] or '-', str(config['amplitude']), str(config['prominence']),
-                str(config['min_distance_px']), str(config['exclude_image_edges']).lower(),
-                str(config['display_min']), str(config['display_max']), str(out), config['units'], config['preprocessing']]
-            record['command'] = command
-            save(out/'execution.json', record)
-            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, shell=False)
-            (out/'stdout.txt').write_text(result.stdout)
-            (out/'stderr.txt').write_text(result.stderr)
-            record['returncode'] = result.returncode
-            if result.returncode:
-                raise RuntimeError('Fiji failed: ' + result.stderr.strip())
+        base = prepared['command']
+        record['imagej_version'] = prepared['imagej_version']
+        record['java_version'] = prepared['java_version']
+        command = base + [config['image_id'], config['detection_image'], config['review_image'],
+            config['nuclei_labels'] or '-', str(config['amplitude']), str(config['prominence']),
+            str(config['min_distance_px']), str(config['exclude_image_edges']).lower(),
+            str(config['display_min']), str(config['display_max']), str(out), config['units'], config['preprocessing']]
+        record['command'] = command
+        save(out/'execution.json', record)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, shell=False)
+        (out/'stdout.txt').write_text(result.stdout)
+        (out/'stderr.txt').write_text(result.stderr)
+        record['returncode'] = result.returncode
+        if result.returncode:
+            raise RuntimeError('Fiji failed: ' + result.stderr.strip())
         expected = ['foci.csv', 'foci.zip', 'review.tif', 'preview.png']
         if config['nuclei_labels']:
             expected += ['nuclei.csv', 'nuclei.zip', 'nuclei_labels.tif']
@@ -165,6 +185,35 @@ def run(env, config, out, timeout):
     return record
 
 
+def batch(env, config_paths, out, timeout=300, workers=1):
+    """Validate all jobs first, then reuse one compilation with bounded subprocesses."""
+    if not 1 <= workers <= 8 or timeout <= 0:
+        raise ValueError('workers must be 1–8 and timeout must be positive')
+    if not config_paths:
+        raise ValueError('Batch requires at least one configuration')
+    configs = [configuration(path) for path in config_paths]
+    ids = [c['image_id'] for c in configs]
+    if len(ids) != len(set(ids)):
+        raise ValueError('Duplicate image_id in batch; use unique IDs for sensitivity variants')
+    out = Path(out).expanduser().resolve()
+    if any((out / image_id).exists() for image_id in ids):
+        raise ValueError('Batch refuses existing image outputs; use a new run or verify checkpoints externally')
+    out.mkdir(parents=True, exist_ok=True)
+    with prepared_helper(env) as helper:
+        def execute(config):
+            destination = out/config['image_id']
+            try:
+                run(env, config, destination, timeout, prepared=helper)
+                return {'image_id': config['image_id'], 'status': 'complete', 'output': str(destination)}
+            except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
+                return {'image_id': config['image_id'], 'status': 'failed', 'output': str(destination),
+                        'error': str(error)}
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(execute, configs))
+    return {'status': 'failed' if any(r['status']=='failed' for r in results) else 'complete',
+            'images': results, 'workers': workers}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
@@ -175,6 +224,12 @@ def main():
     execute.add_argument('--config', required=True)
     execute.add_argument('--out', required=True)
     execute.add_argument('--timeout', type=int, default=300)
+    multi = sub.add_parser('batch', help='Reuse one compilation across configured 2D images')
+    multi.add_argument('--fiji')
+    multi.add_argument('--configs', nargs='+', required=True, help='JSON configuration files')
+    multi.add_argument('--out', required=True, help='Parent folder; child folders use image_id')
+    multi.add_argument('--timeout', type=int, default=300)
+    multi.add_argument('--workers', type=int, default=1, help='Concurrent image processes, 1–8; size to memory')
     args = parser.parse_args()
     env = discover(args.fiji)
     if args.action == 'doctor':
@@ -183,6 +238,11 @@ def main():
             env['imagej_version'] = call(base + ['probe'])[0]
             env['java_version'] = '\n'.join(call([env['java'], '-version']))
         print(json.dumps(env, indent=2))
+    elif args.action == 'batch':
+        result = batch(env, args.configs, args.out, args.timeout, args.workers)
+        print(json.dumps(result, indent=2))
+        if result['status'] == 'failed':
+            sys.exit(1)
     else:
         if args.timeout <= 0:
             raise ValueError('Timeout must be positive')

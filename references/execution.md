@@ -14,6 +14,24 @@ Original ImageJ ROI Manager and WindowManager functionality is restricted in hea
 
 To review, open the generated `review.tif` in Fiji using the host's available app/file tools. It contains the reviewed scalar image and overlay; use the source manifest to open other original channels as needed. Verify overlay alignment and ROI encoding on representative outputs. Do not clear existing user windows, reset the ROI Manager or change installation settings to make a demonstration work.
 
+## Efficient batch execution
+
+Use the same JSON schema as single-image execution:
+
+```bash
+python3 scripts/fiji_foci.py batch --fiji /path/to/Fiji.app \
+  --configs /run/analysis_scripts/configs/img001.json /run/analysis_scripts/configs/img002.json \
+  --out /run/annotations --workers 2
+```
+
+The batch validates configurations and unique IDs before starting, compiles Java and probes versions once, then runs isolated image processes with per-image timeouts and output/hash/status records. Default workers is 1; explicitly raise it only within available RAM/CPU (maximum 8). Results stay in input order. Failed images remain failed and other valid images continue; the CLI exits nonzero if any image fails. The helper refuses existing per-image folders rather than assuming they are valid checkpoints. Resume orchestration must first verify input, configuration, code/software and output hashes, skip only matching complete images, and place changed/failed revisions in a new run.
+
+Python callers can reuse `prepared_helper(env)` and pass its context to `run(..., prepared=helper)`; all workers must finish before that context closes. No persistent global class cache or monkey-patching is needed. This saves compilation/probing overhead; each image still starts its own JVM and produces full native annotations. It is not a measurement-algorithm change or a guaranteed wall-clock speedup.
+
+Decode images and compute masks once per unchanged source/settings during pilot trials. Keep bulky intermediate data in scratch with bounded memory, retaining exact transformation code and regeneration paths. Batch log/artifact writes with `project.py ... --no-render`; one final render checks registered hashes and links. Do not concurrently mutate a single project's event/artifact registry.
+
+For delivery, follow [outputs.md](outputs.md): measurement code belongs in `analysis_scripts/`, graph code in `r_scripts/`. Write the two study-specific script/UI guides from the actual tested execution path; do not invent menu equivalence for stages executed outside Fiji.
+
 ## Smoke test
 
 ```

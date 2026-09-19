@@ -136,7 +136,9 @@ def exercise(root, fiji):
         result=subprocess.run([sys.executable,str(project)]+list(args),capture_output=True,text=True)
         assert (result.returncode!=0) if failure else (result.returncode==0), result.stderr
         return result
-    command('init','--run',str(run),'--source',str(raw),'--title','Synthetic foci review','--mode','table')
+    prompt=root/'request.txt'; prompt.write_text('Count <nuclear> foci; retain this request.')
+    command('init','--run',str(run),'--source',str(raw),'--title','Synthetic foci review',
+            '--mode','table','--prompt',str(prompt))
     decision=root/'decision.json'
     ff.save(decision,{'stage':'detection','parameter':'prominence','value':20,'units':'synthetic ADU',
                      'scope':'synthetic-001','reason':'Known synthetic peak test','evidence':['normal/preview.png'],
@@ -153,8 +155,8 @@ def exercise(root, fiji):
     command('add','--run',str(run),'--file',str(normal/'preview.png'),'--role','preview','--stage','detection',
             '--image-id','synthetic-002','--caption','Second registration tests per-image folders',
             '--scaling','0–140 synthetic ADU; display only')
-    assert (run/'review/images/synthetic-001/preview.png').is_file()
-    assert (run/'review/images/synthetic-002/preview.png').is_file()
+    assert (run/'qc_images/foci_counts/synthetic-001/preview.png').is_file()
+    assert (run/'qc_images/foci_counts/synthetic-002/preview.png').is_file()
     checks.append('Same preview filename remains distinct across image folders')
     command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table','--caption','Per-nucleus counts','--primary')
     command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table','--caption','Duplicate',failure=True)
@@ -167,16 +169,88 @@ def exercise(root, fiji):
     assert '<script>alert' not in report and '&lt;script&gt;' in report
     assert len(rows(run/'provenance/quality_log.csv'))==1 and len(rows(run/'provenance/decision_log.csv'))==1
     links=Links(); links.feed(report)
-    assert all((run/unquote(p)).is_file() for p in links.paths)
-    assert json.loads((run/'provenance/brief.json').read_text())['primary_artifact']=='tables/nuclei.csv'
+    assert all(('id="'+p[1:]+'"' in report) if p.startswith('#') else
+               (run/unquote(p)).is_file() for p in links.paths)
+    assert json.loads((run/'provenance/brief.json').read_text())['primary_artifact']=='csv/main_results/nuclei.csv'
     checks += ['Structured quality and decision logs exported', 'One main CSV selected; supporting report retained',
                'All report links resolve; user text is HTML-escaped', 'Duplicate artifact cannot overwrite existing output']
-    modified=run/'review/images/synthetic-002/preview.png'
+    modified=run/'qc_images/foci_counts/synthetic-002/preview.png'
     original=modified.read_bytes(); modified.write_bytes(original+b'changed')
     command('render','--run',str(run),failure=True)
     modified.write_bytes(original)
     command('render','--run',str(run))
     checks.append('Modified registered artifact detected before report regeneration')
+    # New layout: routing, graph dependencies, deferred render and portable report links.
+    for folder in ('r_scripts', 'csv/qc_segmentation', 'csv/qc_counting_sensitivity',
+                   'csv/stats', 'qc_images/channel_testing', 'qc_images/segmentation',
+                   'analysis_scripts', 'graphs', 'annotations'):
+        assert (run/folder).is_dir()
+    graph_script=root/'01_counts.R'; graph_script.write_text('# Input: csv/main_results/nuclei.csv\n')
+    before=(run/'report.html').read_bytes()
+    command('add','--run',str(run),'--file',str(graph_script),'--role','r_script',
+            '--caption','Editable plot code','--graph-id','01_counts',
+            '--uses','csv/main_results/nuclei.csv','--no-render')
+    assert (run/'report.html').read_bytes()==before
+    command('event','--run',str(run),'--kind','decision','--json',str(decision),'--no-render')
+    assert (run/'report.html').read_bytes()==before
+    command('add','--run',str(run),'--file',str(normal/'preview.png'),'--role','figure',
+            '--caption','Synthetic graph fixture','--graph-id','01_counts',
+            '--uses','csv/main_results/nuclei.csv','--uses','r_scripts/01_counts.R','--no-render')
+    command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table',
+            '--category','../../escape','--caption','Reject unsafe category',failure=True)
+    command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table',
+            '--category','stats','--caption','Reject unregistered input',
+            '--uses','provenance/brief.json',failure=True)
+    assert not (run/'csv/stats/nuclei.csv').exists()
+    command('render','--run',str(run))
+    report=(run/'report.html').read_text(); links=Links();links.feed(report)
+    assert all(('id="'+p[1:]+'"' in report) if p.startswith('#') else
+               (run/unquote(p)).is_file() for p in links.paths)
+    assert 'r_scripts/01_counts.R' in report and 'csv/main_results/nuclei.csv' in report
+    assert 'Count &lt;nuclear&gt; foci' in report
+    for category in ('qc_segmentation','qc_counting_sensitivity','stats'):
+        command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table',
+                '--category',category,'--caption','Synthetic QC/statistics fixture','--no-render')
+        assert (run/'csv'/category/'nuclei.csv').is_file()
+    for role, name, destination in [('analysis_script','processing.py','analysis_scripts'),
+                                   ('guide','SCRIPT_GUIDE.md','analysis_scripts'),
+                                   ('guide','REPRODUCE_IN_FIJI.md','analysis_scripts')]:
+        file=root/name;file.write_text('Synthetic registration fixture only.\n')
+        command('add','--run',str(run),'--file',str(file),'--role',role,
+                '--caption',name,'--no-render')
+        assert (run/destination/name).is_file()
+    command('render','--run',str(run))
+    checks += ['New output categories and graph/script/CSV links resolve',
+               'Deferred rendering leaves report untouched until requested',
+               'Unsafe categories and unregistered dependencies rejected']
+    # Legacy runs render without relocating old paths.
+    legacy=root/'legacy'; command('init','--run',str(legacy),'--source',str(raw),'--title','Legacy')
+    legacy_brief=json.loads((legacy/'provenance/brief.json').read_text());legacy_brief['schema_version']=1
+    ff.save(legacy/'provenance/brief.json',legacy_brief)
+    command('add','--run',str(legacy),'--file',str(normal/'nuclei.csv'),'--role','table','--caption','Legacy CSV')
+    assert (legacy/'tables/nuclei.csv').is_file()
+    checks.append('Version-1 runs retain their original table paths')
+    # Batches reuse one compilation but preserve single-image measurements and failures.
+    c1=root/'batch-one.json'; c2=root/'batch-two.json'; bad=root/'batch-bad.json'
+    ff.save(c1,config); ff.save(c2,dict(config,image_id='synthetic-002'))
+    ff.save(bad,dict(config,image_id='synthetic-bad',detection_image=str(raw/'stack.tif')))
+    from unittest.mock import patch
+    with patch.object(ff,'compile_helper',wraps=ff.compile_helper) as compiler:
+        result=ff.batch(env,[c1,c2,bad],root/'batch',60,workers=2)
+        assert compiler.call_count==1
+    assert result['status']=='failed'
+    assert [r['status'] for r in result['images']]==['complete','complete','failed']
+    assert (normal/'foci.csv').read_bytes()==(root/'batch/synthetic-001/foci.csv').read_bytes()
+    assert json.loads((root/'batch/synthetic-bad/execution.json').read_text())['status']=='failed'
+    try:ff.batch(env,[c1,c1],root/'duplicate-batch',60)
+    except ValueError:pass
+    else:raise AssertionError('Duplicate IDs accepted')
+    assert not (root/'duplicate-batch').exists()
+    try:ff.batch(env,[c1],root/'batch',60)
+    except ValueError:pass
+    else:raise AssertionError('Existing batch output overwritten')
+    checks += ['Batch compiles once, matches single-image counts and retains partial failures',
+               'Batch rejects duplicate IDs and existing outputs before work']
     result={'passed':len(checks),'checks':checks,'environment':env,
             'scope':'Synthetic software behaviour only; no experimental segmentation/counting accuracy assessment.'}
     ff.save(root/'test_results.json',result)
