@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fiji Analysis"
+  short_description: "Guided microscopy analysis with visible QC"
+  default_prompt: "Use $fiji-analysis to inspect my microscopy images, propose a measurement plan and show a pilot in Fiji before batch analysis."
