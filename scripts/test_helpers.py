@@ -155,66 +155,66 @@ def exercise(root, fiji):
     command('add','--run',str(run),'--file',str(normal/'preview.png'),'--role','preview','--stage','detection',
             '--image-id','synthetic-002','--caption','Second registration tests per-image folders',
             '--scaling','0–140 synthetic ADU; display only')
-    assert (run/'qc_images/foci_counts/synthetic-001/preview.png').is_file()
-    assert (run/'qc_images/foci_counts/synthetic-002/preview.png').is_file()
+    assert (run/'QC_images/Foci_counts/synthetic-001/preview.png').is_file()
+    assert (run/'QC_images/Foci_counts/synthetic-002/preview.png').is_file()
     checks.append('Same preview filename remains distinct across image folders')
     command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table','--caption','Per-nucleus counts','--primary')
     command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table','--caption','Duplicate',failure=True)
-    brief=json.loads((run/'provenance/brief.json').read_text())
+    brief=json.loads((run/'Additional_material/Run_records/brief.json').read_text())
     brief.update(status='complete',validation='Synthetic technical test only; no biological accuracy claim',
                  summary=['Four synthetic peaks assigned to three nuclei, including one nucleus with zero foci.'])
-    ff.save(run/'provenance/brief.json',brief)
+    ff.save(run/'Additional_material/Run_records/brief.json',brief)
     command('render','--run',str(run))
-    report=(run/'report.html').read_text()
+    report=(run/'Reports/Experiment_report.html').read_text()
     assert '<script>alert' not in report and '&lt;script&gt;' in report
-    assert len(rows(run/'provenance/quality_log.csv'))==1 and len(rows(run/'provenance/decision_log.csv'))==1
+    assert len(rows(run/'Additional_material/Run_records/quality_log.csv'))==1 and len(rows(run/'Additional_material/Run_records/decision_log.csv'))==1
     links=Links(); links.feed(report)
     assert all(('id="'+p[1:]+'"' in report) if p.startswith('#') else
-               (run/unquote(p)).is_file() for p in links.paths)
-    assert json.loads((run/'provenance/brief.json').read_text())['primary_artifact']=='csv/main_results/nuclei.csv'
+               (run/'Reports'/unquote(p)).is_file() for p in links.paths)
+    assert json.loads((run/'Additional_material/Run_records/brief.json').read_text())['primary_artifact']=='Tables/Main_results/nuclei.csv'
     checks += ['Structured quality and decision logs exported', 'One main CSV selected; supporting report retained',
                'All report links resolve; user text is HTML-escaped', 'Duplicate artifact cannot overwrite existing output']
-    modified=run/'qc_images/foci_counts/synthetic-002/preview.png'
+    modified=run/'QC_images/Foci_counts/synthetic-002/preview.png'
     original=modified.read_bytes(); modified.write_bytes(original+b'changed')
     command('render','--run',str(run),failure=True)
     modified.write_bytes(original)
     command('render','--run',str(run))
     checks.append('Modified registered artifact detected before report regeneration')
     # New layout: routing, graph dependencies, deferred render and portable report links.
-    for folder in ('r_scripts', 'csv/qc_segmentation', 'csv/qc_counting_sensitivity',
-                   'csv/stats', 'qc_images/channel_testing', 'qc_images/segmentation',
-                   'analysis_scripts', 'graphs', 'annotations'):
+    for folder in ('R_scripts', 'Tables/Segmentation_checks', 'Tables/Counting_sensitivity',
+                   'Tables/Statistics', 'QC_images/Channel_checks', 'QC_images/Segmentation',
+                   'Analysis_scripts', 'Graphs', 'Additional_material/Editable_masks_and_ROIs'):
         assert (run/folder).is_dir()
-    graph_script=root/'01_counts.R'; graph_script.write_text('# Input: csv/main_results/nuclei.csv\n')
-    before=(run/'report.html').read_bytes()
+    graph_script=root/'01_counts.R'; graph_script.write_text('# Input: Tables/Main_results/nuclei.csv\n')
+    before=(run/'Reports/Experiment_report.html').read_bytes()
     command('add','--run',str(run),'--file',str(graph_script),'--role','r_script',
             '--caption','Editable plot code','--graph-id','01_counts',
-            '--uses','csv/main_results/nuclei.csv','--no-render')
-    assert (run/'report.html').read_bytes()==before
+            '--uses','Tables/Main_results/nuclei.csv','--no-render')
+    assert (run/'Reports/Experiment_report.html').read_bytes()==before
     command('event','--run',str(run),'--kind','decision','--json',str(decision),'--no-render')
-    assert (run/'report.html').read_bytes()==before
+    assert (run/'Reports/Experiment_report.html').read_bytes()==before
     command('add','--run',str(run),'--file',str(normal/'preview.png'),'--role','figure',
             '--caption','Synthetic graph fixture','--graph-id','01_counts',
-            '--uses','csv/main_results/nuclei.csv','--uses','r_scripts/01_counts.R','--no-render')
+            '--uses','Tables/Main_results/nuclei.csv','--uses','R_scripts/01_counts.R','--no-render')
     command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table',
             '--category','../../escape','--caption','Reject unsafe category',failure=True)
     command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table',
             '--category','stats','--caption','Reject unregistered input',
-            '--uses','provenance/brief.json',failure=True)
-    assert not (run/'csv/stats/nuclei.csv').exists()
+            '--uses','Additional_material/Run_records/brief.json',failure=True)
+    assert not (run/'Tables/Statistics/nuclei.csv').exists()
     command('render','--run',str(run))
-    report=(run/'report.html').read_text(); links=Links();links.feed(report)
+    report=(run/'Reports/Experiment_report.html').read_text(); links=Links();links.feed(report)
     assert all(('id="'+p[1:]+'"' in report) if p.startswith('#') else
-               (run/unquote(p)).is_file() for p in links.paths)
-    assert 'r_scripts/01_counts.R' in report and 'csv/main_results/nuclei.csv' in report
+               (run/'Reports'/unquote(p)).is_file() for p in links.paths)
+    assert 'R_scripts/01_counts.R' in report and 'Tables/Main_results/nuclei.csv' in report
     assert 'Count &lt;nuclear&gt; foci' in report
     for category in ('qc_segmentation','qc_counting_sensitivity','stats'):
         command('add','--run',str(run),'--file',str(normal/'nuclei.csv'),'--role','table',
                 '--category',category,'--caption','Synthetic QC/statistics fixture','--no-render')
-        assert (run/'csv'/category/'nuclei.csv').is_file()
-    for role, name, destination in [('analysis_script','processing.py','analysis_scripts'),
-                                   ('guide','SCRIPT_GUIDE.md','analysis_scripts'),
-                                   ('guide','REPRODUCE_IN_FIJI.md','analysis_scripts')]:
+        assert (run/'Tables'/{'qc_segmentation':'Segmentation_checks', 'qc_counting_sensitivity':'Counting_sensitivity', 'stats':'Statistics'}[category]/'nuclei.csv').is_file()
+    for role, name, destination in [('analysis_script','processing.py','Analysis_scripts'),
+                                   ('guide','Workflow_and_settings.md','Reports'),
+                                   ('guide','Reproduce_in_Fiji.html','Reports')]:
         file=root/name;file.write_text('Synthetic registration fixture only.\n')
         command('add','--run',str(run),'--file',str(file),'--role',role,
                 '--caption',name,'--no-render')
@@ -223,13 +223,41 @@ def exercise(root, fiji):
     checks += ['New output categories and graph/script/CSV links resolve',
                'Deferred rendering leaves report untouched until requested',
                'Unsafe categories and unregistered dependencies rejected']
-    # Legacy runs render without relocating old paths.
-    legacy=root/'legacy'; command('init','--run',str(legacy),'--source',str(raw),'--title','Legacy')
-    legacy_brief=json.loads((legacy/'provenance/brief.json').read_text());legacy_brief['schema_version']=1
-    ff.save(legacy/'provenance/brief.json',legacy_brief)
-    command('add','--run',str(legacy),'--file',str(normal/'nuclei.csv'),'--role','table','--caption','Legacy CSV')
-    assert (legacy/'tables/nuclei.csv').is_file()
-    checks.append('Version-1 runs retain their original table paths')
+    # Legacy schema-1/2 runs render in place, without moving any user files.
+    for version, table_folder in [(1, 'tables'), (2, 'csv/main_results')]:
+        legacy=root/('legacy-'+str(version))
+        command('init','--run',str(legacy),'--source',str(raw),'--title','Legacy')
+        (legacy/'Additional_material/Run_records').rename(legacy/'provenance')
+        legacy_brief=json.loads((legacy/'provenance/brief.json').read_text())
+        legacy_brief['schema_version']=version
+        ff.save(legacy/'provenance/brief.json',legacy_brief)
+        command('add','--run',str(legacy),'--file',str(normal/'nuclei.csv'),
+                '--role','table','--caption','Legacy CSV')
+        assert (legacy/table_folder/'nuclei.csv').is_file()
+        legacy_report=(legacy/'report.html').read_text()
+        links=Links(); links.feed(legacy_report)
+        assert all(('id="'+p[1:]+'"' in legacy_report) if p.startswith('#') else
+                   (legacy/unquote(p)).is_file() for p in links.paths)
+    checks.append('Version-1 and version-2 runs retain their original paths and links')
+    assert set(p.name for p in run.iterdir()) == {
+        'Reports','R_scripts','Tables','QC_images','Analysis_scripts','Graphs','Additional_material'}
+    # Source names with meaningful punctuation survive actual Fiji execution and CSV output.
+    named_config = dict(config, image_id='RepA_siCTRL_DRB+_R-loop_48 (field.1)')
+    named_config_file=root/'named-config.json'; ff.save(named_config_file,named_config)
+    ff.run(env,ff.configuration(named_config_file),root/'named-source',60)
+    assert all(row['image_id']==named_config['image_id'] for row in rows(root/'named-source/foci.csv'))
+    for invalid_id in ('../escape','a/b','a\\b','..','field,1','field\n1'):
+        invalid_file=root/'invalid-name.json'; ff.save(invalid_file,dict(config,image_id=invalid_id))
+        try: ff.configuration(invalid_file)
+        except ValueError: pass
+        else: raise AssertionError('Unsafe source name accepted: '+invalid_id)
+    command('add','--run',str(run),'--file',str(normal/'preview.png'),'--role','preview',
+            '--stage','detection','--image-id',named_config['image_id'],
+            '--caption','Original source stem retained','--scaling','Display only')
+    report=(run/'Reports/Experiment_report.html').read_text();links=Links();links.feed(report)
+    assert all(('id="'+p[1:]+'"' in report) if p.startswith('#') else
+               (run/'Reports'/unquote(p)).is_file() for p in links.paths)
+    checks.append('Simple top-level folders and source-derived names survive Fiji and report linking')
     # Batches reuse one compilation but preserve single-image measurements and failures.
     c1=root/'batch-one.json'; c2=root/'batch-two.json'; bad=root/'batch-bad.json'
     ff.save(c1,config); ff.save(c2,dict(config,image_id='synthetic-002'))

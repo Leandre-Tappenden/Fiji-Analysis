@@ -23,7 +23,7 @@ For each finding, log scope, evidence, affected endpoints and action. Examples:
 
 Sample across repeat, condition and acquisition regime; add random fields and difficult flagged examples. Avoid selecting only bright, isolated objects. Use original-resolution crops to inspect over-splitting, merging, boundary errors, dim false positives, clustered peaks and cytoplasmic signal. Keep condition labels hidden during tuning when practical. Treat inferred biological expectations as unavailable to the parameter selection step.
 
-For a new method, compare a small number of plausible parameter settings, documenting the tradeoff. Sensitivity checks should cover both segmentation and detection when both can affect the endpoint. Freeze settings and adaptation rules before comparing conditions. Per-batch noise adaptation must have a defined estimator and justification; biological texture can contaminate a noise estimate.
+For a new method, compare a small number of plausible parameter settings, documenting the tradeoff. Sensitivity checks should cover both segmentation and detection when both can affect the endpoint. Freeze settings before comparing conditions. Keep numerical detection settings constant within each assay/comparable acquisition group. Per-image adaptation is an explicit user-agreed exception with a validated technical-background estimator; biological texture can contaminate noise estimates. See foci-2d.md for selection principles and workflow-reuse.md when applying a saved protocol.
 
 ## Quantitative validation
 

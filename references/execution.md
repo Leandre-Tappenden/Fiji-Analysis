@@ -8,7 +8,7 @@ The bundled helpers use Python 3's standard library. The Java helper uses the lo
 
 The Python launcher passes arguments as a list, uses a timeout and records the exact command and process output. Numerical settings come from validated JSON. It never builds a shell command from filenames. Compilation occurs in a temporary directory and source files are hashed. Outputs are marked started/complete/failed in `execution.json`; only a zero exit and the complete expected file set yield complete status. This is execution status, not scientific validation.
 
-For operations beyond the maxima helper, use available parameterised SciJava scripts, ImageJ macros or supported plugin APIs. Test required operations on a pilot before batch execution. Include script identity, parameters, software/plugins, channel mapping and preprocessing in provenance. Do not depend on the “current image” in headless code.
+For operations beyond the maxima helper, use available parameterised SciJava scripts, ImageJ macros or supported plugin APIs. Test required operations on a pilot before batch execution. Include script identity, parameters, software/plugins, channel mapping and preprocessing in the workflow and additional run records. Do not depend on the “current image” in headless code.
 
 Original ImageJ ROI Manager and WindowManager functionality is restricted in headless mode. Use explicit ImagePlus references, Overlay and ROI encoding for batch outputs; use a graphical session for user interaction. PyImageJ also has macOS interactive-mode constraints. If a plugin requires UI, use a tested GUI path or explain the limitation. Do not silently substitute a different measurement.
 
@@ -20,8 +20,8 @@ Use the same JSON schema as single-image execution:
 
 ```bash
 python3 scripts/fiji_foci.py batch --fiji /path/to/Fiji.app \
-  --configs /run/analysis_scripts/configs/img001.json /run/analysis_scripts/configs/img002.json \
-  --out /run/annotations --workers 2
+  --configs /run/Analysis_scripts/configs/RepA_field-01.json /run/Analysis_scripts/configs/RepB_field-01.json \
+  --out /run/Additional_material/Editable_masks_and_ROIs --workers 2
 ```
 
 The batch validates configurations and unique IDs before starting, compiles Java and probes versions once, then runs isolated image processes with per-image timeouts and output/hash/status records. Default workers is 1; explicitly raise it only within available RAM/CPU (maximum 8). Results stay in input order. Failed images remain failed and other valid images continue; the CLI exits nonzero if any image fails. The helper refuses existing per-image folders rather than assuming they are valid checkpoints. Resume orchestration must first verify input, configuration, code/software and output hashes, skip only matching complete images, and place changed/failed revisions in a new run.
@@ -30,7 +30,7 @@ Python callers can reuse `prepared_helper(env)` and pass its context to `run(...
 
 Decode images and compute masks once per unchanged source/settings during pilot trials. Keep bulky intermediate data in scratch with bounded memory, retaining exact transformation code and regeneration paths. Batch log/artifact writes with `project.py ... --no-render`; one final render checks registered hashes and links. Do not concurrently mutate a single project's event/artifact registry.
 
-For delivery, follow [outputs.md](outputs.md): measurement code belongs in `analysis_scripts/`, graph code in `r_scripts/`. Write the two study-specific script/UI guides from the actual tested execution path; do not invent menu equivalence for stages executed outside Fiji.
+For delivery, follow [outputs.md](outputs.md): measurement code belongs in `Analysis_scripts/`, graph code in `R_scripts/`. Write the study-specific workflow, script and UI guides from the actual tested execution path; do not invent menu equivalence for stages executed outside Fiji.
 
 ## Smoke test
 

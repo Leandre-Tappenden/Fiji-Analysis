@@ -1,4 +1,4 @@
 interface:
   display_name: "Fiji Analysis"
   short_description: "Microscopy analysis with organised results and visible QC"
-  default_prompt: "Use $fiji-analysis to analyse my microscopy images; first ask whether I want to supply details or let you use your judgement, then deliver organised results and editable graph scripts."
+  default_prompt: "Use $fiji-analysis to analyse my microscopy images; first ask whether to reuse a previous analysis workflow, then offer autonomous or guided setup and deliver simple results with editable graphs."

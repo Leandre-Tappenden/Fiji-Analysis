@@ -1,37 +1,39 @@
 # Fiji-Analysis
 
-A Codex skill for reproducible microscopy analysis with local Fiji/ImageJ.
-Start with [SKILL.md](SKILL.md). The first interaction offers a choice between
-providing study/graph preferences and letting the agent use documented judgement.
+A Codex skill for microscopy analysis with local Fiji/ImageJ. Start with
+[SKILL.md](SKILL.md). First choose whether to reuse a previous run; otherwise
+choose autonomous judgement, your own detailed request, or short guided questions.
 
-New analysis runs use one results folder:
+New runs use `Fiji-Analysis-Results-YYYY-MM-DD-HHMMSS/`:
 
 ```text
-report.html          Summary, contents and links to code, data and QC
-r_scripts/           Commented, editable graph scripts
-csv/                 Main results, segmentation QC, threshold trials and statistics
-qc_images/           Channel testing, segmentation and foci-count previews
-analysis_scripts/    Executed code, SCRIPT_GUIDE.md and REPRODUCE_IN_FIJI.md
-graphs/              Presentation-ready PNGs and requested additional formats
-annotations/         Native editable Fiji overlays, ROIs and masks
-provenance/          Source manifest, configurations and execution/decision records
+Reports/              Experiment_report.html, Reproduce_in_Fiji.html,
+                      Workflow_and_settings.md (the reusable protocol)
+R_scripts/            Readable, commented scripts with an EDIT HERE section
+Tables/               Main results, segmentation checks, sensitivity, statistics
+QC_images/            Channel checks, segmentation and foci-count previews
+Analysis_scripts/     Exact executed code/configuration and Script_guide.md
+Graphs/               Presentation-ready PNGs
+Additional_material/  Editable masks/ROIs and detailed run records
 ```
 
-See [output conventions](references/outputs.md) for naming and graph-to-data links,
-and [execution guidance](references/execution.md) for local requirements.
-The guides in each run must describe that study's actual code and settings; they
-are not automatically generated biological protocols.
+Original image names remain recognisable, with repeat tags where needed.
+Keep scientific settings constant within each assay/comparable acquisition group;
+per-image adaptive detection is an explicit exception. The skill guides method
+selection from morphology and QC, not fixed universal thresholds or expected effects.
 
-The maxima helper supports `run` for one image and `batch` to compile Java once
-for several images. `project.py add/event --no-render` defers report generation
-until `project.py render`. Older runs retain their original paths.
+See [outputs](references/outputs.md), [workflow reuse](references/workflow-reuse.md),
+[readable R example](references/editable-graph.R), and [execution](references/execution.md).
+Reusing a protocol preserves scripts unchanged where compatible and reports every
+necessary deviation. Guides must describe the actual analysis, not a generic template.
 
-Run the technical checks against a local Fiji installation:
+The maxima helper supports single-image `run` and `batch` with one Java compilation.
+`project.py add/event --no-render` defers rendering until `project.py render`.
+New runs use schema 3; old schema-1/2 runs retain their original paths.
 
 ```sh
 python3 scripts/test_helpers.py --fiji /path/to/Fiji.app
 ```
 
-These synthetic checks verify software behaviour, not segmentation accuracy or
-antibody specificity. The skill does not supply a universally validated nuclear
-segmentation model or a 3D foci method.
+Synthetic checks verify software behaviour, not biological accuracy. The skill does
+not supply a universally validated nuclear segmentation model or 3D foci method.

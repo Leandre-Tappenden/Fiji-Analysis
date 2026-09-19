@@ -87,8 +87,8 @@ def configuration(path):
                 'units', 'preprocessing'}
     if not isinstance(config, dict) or set(config) != required:
         raise ValueError('Configuration keys must be exactly: ' + ', '.join(sorted(required)))
-    if not isinstance(config['image_id'], str) or not re.fullmatch(r'[A-Za-z0-9_-]+', config['image_id']):
-        raise ValueError('image_id must use safe letters, digits, underscores or hyphens')
+    if not isinstance(config['image_id'], str) or not re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_. +()-]*', config['image_id']):
+        raise ValueError('image_id must be a safe source-derived filename stem (no path separators)')
     for key in ('amplitude', 'prominence', 'min_distance_px', 'display_min', 'display_max'):
         if type(config[key]) not in (float, int) or not math.isfinite(config[key]):
             raise ValueError(key + ' must be a finite number')

@@ -46,27 +46,34 @@ def internal(root, relative):
     return path
 
 
+def record_dir(root):
+    """Read old runs in place; new runs keep technical records out of the main view."""
+    modern = root/'Additional_material/Run_records'
+    return modern if (modern/'brief.json').exists() else root/'provenance'
+
+
 def init(args):
     source = Path(args.source).expanduser().resolve(strict=True)
     root = Path(args.run).expanduser().resolve()
     if source == root or source in root.parents:
         raise ValueError('Choose a run outside the raw source directory')
     root.mkdir(parents=True, exist_ok=False)
-    for folder in ('r_scripts', 'csv/main_results', 'csv/qc_segmentation',
-                   'csv/qc_counting_sensitivity', 'csv/stats', 'qc_images/channel_testing',
-                   'qc_images/segmentation', 'qc_images/foci_counts', 'analysis_scripts',
-                   'graphs', 'annotations', 'provenance'):
+    for folder in ('Reports', 'R_scripts', 'Tables/Main_results',
+                   'Tables/Segmentation_checks', 'Tables/Counting_sensitivity', 'Tables/Statistics',
+                   'QC_images/Channel_checks', 'QC_images/Segmentation', 'QC_images/Foci_counts',
+                   'Analysis_scripts', 'Graphs', 'Additional_material/Editable_masks_and_ROIs',
+                   'Additional_material/Run_records'):
         (root/folder).mkdir(parents=True, exist_ok=True)
-    brief = {'schema_version': 2, 'run_id': root.name, 'title': args.title,
+    brief = {'schema_version': 3, 'run_id': root.name, 'title': args.title,
              'source': str(source), 'created_utc': timestamp(), 'output_mode': args.mode,
              'primary_artifact': None, 'status': 'draft',
              'validation': 'Not yet assessed', 'summary': [], 'measurement': {}, 'design': {},
              'channel_mapping': [], 'open_questions': []}
-    write(root/'provenance/brief.json', brief)
-    write(root/'provenance/artifacts.json', [])
-    (root/'provenance/events.jsonl').touch()
+    write(root/'Additional_material/Run_records/brief.json', brief)
+    write(record_dir(root)/'artifacts.json', [])
+    (record_dir(root)/'events.jsonl').touch()
     if args.prompt:
-        shutil.copyfile(Path(args.prompt).resolve(strict=True), root/'provenance/original_prompt.txt')
+        shutil.copyfile(Path(args.prompt).resolve(strict=True), record_dir(root)/'original_prompt.txt')
     render(root)
     return {'run': str(root), 'status': 'draft', 'mode': args.mode}
 
@@ -89,12 +96,13 @@ def event(args, root):
         if not isinstance(value['affected_metrics'], list):
             raise ValueError('affected_metrics must be a list')
     record = dict(value, kind=args.kind, event_id=str(uuid.uuid4()), timestamp_utc=timestamp())
-    brief = read(root/'provenance/brief.json')
+    brief = read(record_dir(root)/'brief.json')
     record['run_id'] = brief['run_id']
-    parameters = root/'provenance/parameters.json'
+    parameters = (root/'Analysis_scripts/parameters.json' if brief.get('schema_version', 1) >= 3
+                  else record_dir(root)/'parameters.json')
     if parameters.exists():
         record['configuration_sha256'] = digest(parameters)
-    with (root/'provenance/events.jsonl').open('a', encoding='utf-8') as f:
+    with (record_dir(root)/'events.jsonl').open('a', encoding='utf-8') as f:
         f.write(json.dumps(record, ensure_ascii=False, allow_nan=False)+'\n')
     if not getattr(args, 'no_render', False):
         render(root)
@@ -112,7 +120,7 @@ def add(args, root):
             raise ValueError('Preview must be PNG or JPEG')
         if not args.stage or not args.scaling or not args.image_id:
             raise ValueError('Preview requires --stage, --scaling and --image-id')
-    brief = read(root/'provenance/brief.json')
+    brief = read(record_dir(root)/'brief.json')
     category = getattr(args, 'category', None)
     graph_id = getattr(args, 'graph_id', None)
     uses = getattr(args, 'uses', None) or []
@@ -138,7 +146,17 @@ def add(args, root):
         locations.update(r_script='r_scripts', analysis_script='analysis_scripts', guide='analysis_scripts')
         if category:
             raise ValueError('Categories require a version-2 run; keep legacy paths unchanged')
-    artifacts = read(root/'provenance/artifacts.json')
+    if brief.get('schema_version', 1) >= 3:
+        tables = {'main_results': 'Main_results', 'qc_segmentation': 'Segmentation_checks',
+                  'qc_counting_sensitivity': 'Counting_sensitivity', 'stats': 'Statistics'}
+        previews = {'channel_testing': 'Channel_checks', 'segmentation': 'Segmentation',
+                    'foci_counts': 'Foci_counts'}
+        locations = {'table': 'Tables/' + tables.get(category, 'Main_results'),
+                     'preview': 'QC_images/' + previews.get(category, 'Foci_counts'),
+                     'figure': 'Graphs', 'annotation': 'Additional_material/Editable_masks_and_ROIs',
+                     'provenance': 'Additional_material/Run_records', 'r_script': 'R_scripts',
+                     'analysis_script': 'Analysis_scripts', 'guide': 'Reports'}
+    artifacts = read(record_dir(root)/'artifacts.json')
     registered = {a['path'] for a in artifacts}
     for dependency in uses:
         if Path(dependency).is_absolute() or not internal(root, dependency).is_file():
@@ -152,13 +170,13 @@ def add(args, root):
             raise ValueError('--primary must match the chosen table/figures mode')
     destination = Path(locations[args.role])
     if args.image_id:
-        if not re.fullmatch(r'[A-Za-z0-9_-]+', args.image_id):
-            raise ValueError('image-id must use safe letters, digits, underscores or hyphens')
+        if not re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_. +()-]*', args.image_id):
+            raise ValueError('image-id must be a safe source-derived filename stem (no path separators)')
         if args.role in ('preview', 'annotation'):
             destination /= args.image_id
     relative = (destination/source.name).as_posix()
     target = internal(root, relative)
-    artifacts = read(root/'provenance/artifacts.json')
+    artifacts = read(record_dir(root)/'artifacts.json')
     if any(a['path'] == relative for a in artifacts):
         raise ValueError('Artifact already registered; use a new filename for a revision')
     if target != source:
@@ -171,10 +189,10 @@ def add(args, root):
                 'scaling': args.scaling or '', 'category': category or '',
                 'graph_id': graph_id or '', 'uses': uses, 'sha256': digest(target), 'registered_utc': timestamp()}
     artifacts.append(artifact)
-    write(root/'provenance/artifacts.json', artifacts)
+    write(record_dir(root)/'artifacts.json', artifacts)
     if args.primary:
         brief['primary_artifact'] = relative
-        write(root/'provenance/brief.json', brief)
+        write(record_dir(root)/'brief.json', brief)
     if not getattr(args, 'no_render', False):
         render(root)
     return artifact
@@ -216,16 +234,16 @@ def brief_section(value):
 def export_events(root, events, kind, name):
     records = [e for e in events if e['kind'] == kind]
     fields = list(dict.fromkeys(k for e in records for k in e)) or ['event_id', 'timestamp_utc', 'kind']
-    with (root/'provenance'/name).open('w', newline='', encoding='utf-8') as f:
+    with (record_dir(root)/name).open('w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows({k: fmt(v) for k,v in e.items()} for e in records)
 
 
 def render(root):
-    brief = read(root/'provenance/brief.json')
-    artifacts = read(root/'provenance/artifacts.json')
-    events = [json.loads(line) for line in (root/'provenance/events.jsonl').read_text().splitlines() if line.strip()]
+    brief = read(record_dir(root)/'brief.json')
+    artifacts = read(record_dir(root)/'artifacts.json')
+    events = [json.loads(line) for line in (record_dir(root)/'events.jsonl').read_text().splitlines() if line.strip()]
     for a in artifacts:
         artifact_path = internal(root, a['path'])
         if not artifact_path.is_file():
@@ -264,7 +282,7 @@ def render(root):
                 ('method', 'Method and sensitivity'), ('image-checks', 'QC images'),
                 ('quality', 'Data quality'), ('decisions', 'Measurement decisions'),
                 ('files', 'Reproduction and files')]
-    if (root/'provenance/original_prompt.txt').is_file():
+    if (record_dir(root)/'original_prompt.txt').is_file():
         sections.append(('prompt', 'Original request'))
     parts.append('<nav aria-label="Contents"><h2>Contents</h2><ul>' + ''.join(
         '<li><a href="#'+key+'">'+label+'</a></li>' for key,label in sections) + '</ul></nav>')
@@ -315,12 +333,14 @@ def render(root):
     quality = [e for e in events if e['kind']=='quality']
     decisions = [e for e in events if e['kind']=='decision']
     parts += ['<h2 id="quality">Data quality</h2>', table(quality, ['severity','scope','finding','action','affected_metrics']),
-              '<h2 id="decisions">Measurement decisions</h2>', table(decisions, ['parameter','value','units','scope','reason','chosen_by'])]
+              '<h2 id="decisions">Measurement decisions</h2>', '<details><summary>Detailed settings and decision history</summary>'+table(decisions, ['parameter','value','units','scope','reason','chosen_by'])+'</details>']
     parts.append('<h2 id="files">Reproduction and files</h2>')
-    groups = [('Graphs', ['figure']), ('R scripts', ['r_script']), ('CSV data', ['table']),
+    for guide in (a for a in artifacts if a['role'] == 'guide'):
+        parts.append('<p>'+artifact_link(guide)+'</p>')
+    groups = [('Graphs', ['figure']), ('R scripts', ['r_script']), ('Results tables', ['table']),
               ('Analysis scripts and guides', ['analysis_script', 'guide']),
-              ('QC images', ['preview']), ('Editable annotations', ['annotation']),
-              ('Provenance', ['provenance'])]
+              ('QC images', ['preview']), ('Editable masks and ROIs', ['annotation']),
+              ('Additional run records', ['provenance'])]
     for title, roles in groups:
         selected = [a for a in artifacts if a['role'] in roles]
         if selected:
@@ -331,15 +351,24 @@ def render(root):
     for path, label in [('provenance/brief.json','Analysis brief'),('provenance/quality_log.csv','Full quality log'),
                         ('provenance/decision_log.csv','Full decision log'),('provenance/events.jsonl','Event history'),
                         ('provenance/artifacts.json','Artifact registry')]:
-        parts.append('<li><a href="'+path+'">'+label+' — '+path+'</a></li>')
+        path = (record_dir(root)/Path(path).name).relative_to(root).as_posix()
+        parts.append('<li><a href="'+quote(path)+'">'+label+' — '+path+'</a></li>')
     parts.append('</ul></details>')
-    prompt = root/'provenance/original_prompt.txt'
+    prompt = record_dir(root)/'original_prompt.txt'
     if prompt.is_file():
         parts.append('<h2 id="prompt">Original request</h2><pre style="white-space:pre-wrap">'+
                      escaped(prompt.read_text(encoding='utf-8'))+'</pre>')
     parts.append('</body></html>')
-    (root/'report.html').write_text('\n'.join(parts), encoding='utf-8')
-    return {'report': str(root/'report.html'), 'primary': str(root/primary) if primary else str(root/'report.html')}
+    report = root/'report.html'
+    document = '\n'.join(parts)
+    if brief.get('schema_version', 1) >= 3:
+        report = root/'Reports/Experiment_report.html'
+        # Artifact paths are stored relative to the run; links are relative to Reports/.
+        document = re.sub(r'(href|src)="([^"#][^"]*)"',
+                          lambda m: m[1]+'="../'+m[2]+'"', document)
+    report.write_text(document, encoding='utf-8')
+    return {'report': str(report), 'primary': str(root/primary) if primary else str(report)}
+
 
 
 def main():
@@ -368,7 +397,7 @@ def main():
         result = init(args)
     else:
         root = Path(args.run).expanduser().resolve(strict=True)
-        read(root/'provenance/brief.json')
+        read(record_dir(root)/'brief.json')
         result = render(root) if args.action=='render' else (event(args,root) if args.action=='event' else add(args,root))
     print(json.dumps(result, ensure_ascii=False))
 
